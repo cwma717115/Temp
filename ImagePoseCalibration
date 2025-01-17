@@ -1,0 +1,164 @@
+using OpenCvSharp;
+using System;
+
+public class ChessboardPoseEstimator
+{
+    private readonly Size patternSize;  // 棋盤格內角點數（如 9x6）
+    private readonly float squareSize;  // 棋盤格方格實際大小（單位：公尺）
+    private readonly Mat cameraMatrix;  // 相機內參
+    private readonly Mat distCoeffs;    // 相機畸變參數
+
+    public ChessboardPoseEstimator(Size patternSize, float squareSize = 0.025f)
+    {
+        this.patternSize = patternSize;
+        this.squareSize = squareSize;
+        
+        // 預設相機參數（需要實際標定獲得更準確的值）
+        cameraMatrix = new Mat(3, 3, MatType.CV_64F);
+        distCoeffs = Mat.Zeros(1, 5, MatType.CV_64F);
+    }
+
+    public (double roll, double yaw, double pitch) EstimateRotation(Mat image)
+    {
+        // 轉換為灰度圖
+        Mat gray = new Mat();
+        Cv2.CvtColor(image, gray, ColorConversionCodes.BGR2GRAY);
+
+        // 尋找棋盤格角點
+        Point2f[] corners;
+        bool found = Cv2.FindChessboardCorners(gray, patternSize, out corners,
+            ChessboardFlags.AdaptiveThresh | ChessboardFlags.NormalizeImage);
+
+        if (!found || corners == null)
+            throw new Exception("無法找到棋盤格角點");
+
+        // 優化角點位置
+        var criteria = new TermCriteria(CriteriaTypes.Eps | CriteriaTypes.MaxIter, 30, 0.001);
+        Cv2.CornerSubPix(gray, corners, new Size(11, 11), new Size(-1, -1), criteria);
+
+        // 生成世界坐標系中的棋盤格角點
+        Point3f[] objectPoints = GenerateObjectPoints();
+
+        // 求解PnP問題獲得旋轉向量和平移向量
+        Mat rvec = new Mat();
+        Mat tvec = new Mat();
+        Cv2.SolvePnP(objectPoints, corners, cameraMatrix, distCoeffs, rvec, tvec);
+
+        // 將旋轉向量轉換為旋轉矩陣
+        Mat rotationMatrix = new Mat();
+        Cv2.Rodrigues(rvec, rotationMatrix);
+
+        // 計算歐拉角
+        var angles = RotationMatrixToEulerAngles(rotationMatrix);
+
+        // 繪製結果（可選）
+        DrawChessboardAxes(image, rvec, tvec);
+
+        return angles;
+    }
+
+    private Point3f[] GenerateObjectPoints()
+    {
+        var objectPoints = new Point3f[patternSize.Width * patternSize.Height];
+        for (int i = 0; i < patternSize.Height; i++)
+        {
+            for (int j = 0; j < patternSize.Width; j++)
+            {
+                objectPoints[i * patternSize.Width + j] = 
+                    new Point3f(j * squareSize, i * squareSize, 0);
+            }
+        }
+        return objectPoints;
+    }
+
+    private (double roll, double yaw, double pitch) RotationMatrixToEulerAngles(Mat R)
+    {
+        // 從旋轉矩陣計算歐拉角
+        double sy = Math.Sqrt(
+            R.Get<double>(0, 0) * R.Get<double>(0, 0) +
+            R.Get<double>(1, 0) * R.Get<double>(1, 0)
+        );
+
+        bool singular = sy < 1e-6;
+        double roll, pitch, yaw;
+
+        if (!singular)
+        {
+            roll = Math.Atan2(R.Get<double>(2, 1), R.Get<double>(2, 2));
+            pitch = Math.Atan2(-R.Get<double>(2, 0), sy);
+            yaw = Math.Atan2(R.Get<double>(1, 0), R.Get<double>(0, 0));
+        }
+        else
+        {
+            roll = Math.Atan2(-R.Get<double>(1, 2), R.Get<double>(1, 1));
+            pitch = Math.Atan2(-R.Get<double>(2, 0), sy);
+            yaw = 0;
+        }
+
+        // 轉換為角度
+        return (
+            roll * 180.0 / Math.PI,
+            yaw * 180.0 / Math.PI,
+            pitch * 180.0 / Math.PI
+        );
+    }
+
+    private void DrawChessboardAxes(Mat image, Mat rvec, Mat tvec)
+    {
+        // 繪製座標軸以視覺化姿態
+        float length = squareSize * 2;
+        Point3f[] axesPoints = new Point3f[]
+        {
+            new Point3f(0, 0, 0),
+            new Point3f(length, 0, 0),  // X軸：紅色
+            new Point3f(0, length, 0),  // Y軸：綠色
+            new Point3f(0, 0, length)   // Z軸：藍色
+        };
+
+        Point2f[] imagePoints;
+        Cv2.ProjectPoints(axesPoints, rvec, tvec, cameraMatrix, distCoeffs, out imagePoints);
+
+        // 繪製三個軸
+        Cv2.Line(image, Point.Round(imagePoints[0]), Point.Round(imagePoints[1]), Scalar.Red, 2);      // X軸
+        Cv2.Line(image, Point.Round(imagePoints[0]), Point.Round(imagePoints[2]), Scalar.Green, 2);    // Y軸
+        Cv2.Line(image, Point.Round(imagePoints[0]), Point.Round(imagePoints[3]), Scalar.Blue, 2);     // Z軸
+    }
+
+    // 設置相機參數（如果有實際標定結果）
+    public void SetCameraParameters(Mat cameraMatrix, Mat distCoeffs)
+    {
+        this.cameraMatrix.SetTo(cameraMatrix);
+        this.distCoeffs.SetTo(distCoeffs);
+    }
+}
+
+// 使用範例
+public class Program
+{
+    public static void Main()
+    {
+        using (var image = Cv2.ImRead("chessboard.jpg"))
+        {
+            // 建立姿態估計器（設定棋盤格內角點數，例如9x6）
+            var estimator = new ChessboardPoseEstimator(new Size(9, 6), squareSize: 0.025f);
+
+            try
+            {
+                // 估計旋轉角度
+                var (roll, yaw, pitch) = estimator.EstimateRotation(image);
+                
+                Console.WriteLine($"估計角度：");
+                Console.WriteLine($"Roll (Z軸旋轉): {roll:F2}°");
+                Console.WriteLine($"Yaw (Y軸旋轉): {yaw:F2}°");
+                Console.WriteLine($"Pitch (X軸旋轉): {pitch:F2}°");
+
+                // 儲存視覺化結果
+                Cv2.ImWrite("result.jpg", image);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"錯誤：{ex.Message}");
+            }
+        }
+    }
+}
