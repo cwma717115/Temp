@@ -1,0 +1,142 @@
+using OpenCvSharp;
+using System;
+
+public class TiltBlurEffect
+{
+    public static Mat Apply3DTiltBlur(Mat sourceImage, float rollAngle, float yawAngle, float pitchAngle, 
+        float maxBlurRadius = 15.0f)
+    {
+        // 創建輸出影像
+        Mat result = sourceImage.Clone();
+        int height = sourceImage.Height;
+        int width = sourceImage.Width;
+
+        // 計算傾角對應的變換矩陣
+        float[,] depthMap = CalculateDepthMap(width, height, rollAngle, yawAngle, pitchAngle);
+
+        // 根據深度圖計算每個像素的模糊程度
+        for (int y = 0; y < height; y++)
+        {
+            for (int x = 0; x < width; x++)
+            {
+                // 計算模糊半徑（根據深度值）
+                float normalizedDepth = depthMap[y, x];
+                float blurRadius = normalizedDepth * maxBlurRadius;
+
+                // 如果需要模糊
+                if (blurRadius > 1.0f)
+                {
+                    // 提取ROI（Region of Interest）
+                    int kernelSize = (int)(blurRadius * 2 + 1);
+                    kernelSize = kernelSize % 2 == 0 ? kernelSize + 1 : kernelSize; // 確保是奇數
+
+                    // 對當前像素進行高斯模糊
+                    using (Mat roi = new Mat(sourceImage, new Rect(
+                        Math.Max(0, x - kernelSize / 2),
+                        Math.Max(0, y - kernelSize / 2),
+                        Math.Min(kernelSize, width - x + kernelSize / 2),
+                        Math.Min(kernelSize, height - y + kernelSize / 2))))
+                    {
+                        Mat blurred = roi.GaussianBlur(new Size(kernelSize, kernelSize), blurRadius);
+                        result.Set(y, x, blurred.Get<Vec3b>(roi.Height / 2, roi.Width / 2));
+                    }
+                }
+            }
+        }
+
+        return result;
+    }
+
+    private static float[,] CalculateDepthMap(int width, int height, float rollAngle, float yawAngle, float pitchAngle)
+    {
+        float[,] depthMap = new float[height, width];
+
+        // 將角度轉換為弧度
+        float rollRad = rollAngle * (float)Math.PI / 180.0f;
+        float yawRad = yawAngle * (float)Math.PI / 180.0f;
+        float pitchRad = pitchAngle * (float)Math.PI / 180.0f;
+
+        // 建立旋轉矩陣
+        float[,] rotationMatrix = Calculate3DRotationMatrix(rollRad, yawRad, pitchRad);
+
+        // 計算每個像素的深度值
+        for (int y = 0; y < height; y++)
+        {
+            for (int x = 0; x < width; x++)
+            {
+                // 標準化坐標 (-1 到 1)
+                float normalizedX = (2.0f * x / width) - 1.0f;
+                float normalizedY = (2.0f * y / height) - 1.0f;
+
+                // 應用旋轉變換
+                float[] point = new float[] { normalizedX, normalizedY, 1.0f };
+                float[] rotatedPoint = ApplyRotation(rotationMatrix, point);
+
+                // 計算深度值（Z軸方向的投影）
+                depthMap[y, x] = (1.0f - rotatedPoint[2]) * 0.5f;
+            }
+        }
+
+        return depthMap;
+    }
+
+    private static float[,] Calculate3DRotationMatrix(float roll, float yaw, float pitch)
+    {
+        // 計算旋轉矩陣的各個元素
+        float cr = (float)Math.Cos(roll);
+        float sr = (float)Math.Sin(roll);
+        float cy = (float)Math.Cos(yaw);
+        float sy = (float)Math.Sin(yaw);
+        float cp = (float)Math.Cos(pitch);
+        float sp = (float)Math.Sin(pitch);
+
+        float[,] matrix = new float[3, 3];
+
+        // 組合旋轉矩陣 (Roll * Pitch * Yaw)
+        matrix[0, 0] = cy * cp;
+        matrix[0, 1] = cy * sp * sr - sy * cr;
+        matrix[0, 2] = cy * sp * cr + sy * sr;
+        matrix[1, 0] = sy * cp;
+        matrix[1, 1] = sy * sp * sr + cy * cr;
+        matrix[1, 2] = sy * sp * cr - cy * sr;
+        matrix[2, 0] = -sp;
+        matrix[2, 1] = cp * sr;
+        matrix[2, 2] = cp * cr;
+
+        return matrix;
+    }
+
+    private static float[] ApplyRotation(float[,] matrix, float[] point)
+    {
+        float[] result = new float[3];
+        for (int i = 0; i < 3; i++)
+        {
+            result[i] = matrix[i, 0] * point[0] + 
+                       matrix[i, 1] * point[1] + 
+                       matrix[i, 2] * point[2];
+        }
+        return result;
+    }
+}
+
+// 使用範例：
+public class Program
+{
+    public static void Main()
+    {
+        // 讀取原始圖片
+        using (Mat source = new Mat("input.jpg"))
+        {
+            // 設定傾角參數（角度）
+            float roll = 30.0f;   // X軸旋轉
+            float yaw = 20.0f;    // Y軸旋轉
+            float pitch = 10.0f;  // Z軸旋轉
+
+            // 應用3D傾角模糊效果
+            Mat result = TiltBlurEffect.Apply3DTiltBlur(source, roll, yaw, pitch);
+
+            // 儲存結果
+            result.SaveImage("output.jpg");
+        }
+    }
+}
