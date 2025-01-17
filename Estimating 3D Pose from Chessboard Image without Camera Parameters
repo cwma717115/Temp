@@ -1,0 +1,106 @@
+using OpenCvSharp;
+using System;
+
+public class ChessboardPoseEstimator
+{
+    private readonly int squareSize; // 已知的棋盤格方格像素大小
+    
+    public ChessboardPoseEstimator(int squareSize)
+    {
+        this.squareSize = squareSize;
+    }
+
+    public (double roll, double pitch, double yaw) EstimatePose(string imagePath)
+    {
+        using (var img = Cv2.ImRead(imagePath))
+        {
+            // 1. 轉換為灰度圖
+            using (var gray = img.CvtColor(ColorConversionCodes.BGR2GRAY))
+            {
+                // 2. 找到棋盤格角點
+                var patternSize = new Size(7, 7); // 假設是7x7的角點
+                if (!Cv2.FindChessboardCorners(gray, patternSize, out Point2f[] corners))
+                {
+                    throw new Exception("無法找到棋盤格角點");
+                }
+
+                // 3. 優化角點位置
+                var criteria = new TermCriteria(CriteriaTypes.Eps | CriteriaTypes.MaxIter, 30, 0.001);
+                Cv2.CornerSubPix(gray, corners, new Size(11, 11), new Size(-1, -1), criteria);
+
+                // 4. 計算透視變換矩陣
+                var idealPoints = CreateIdealChessboardPoints(patternSize, squareSize);
+                var homography = Cv2.FindHomography(idealPoints, corners);
+
+                // 5. 從透視變換矩陣中提取旋轉角度
+                var (roll, pitch, yaw) = ExtractAnglesFromHomography(homography);
+
+                // 可視化結果
+                Cv2.DrawChessboardCorners(img, patternSize, corners, true);
+                Cv2.ImShow("Detected Corners", img);
+                Cv2.WaitKey(0);
+
+                return (roll, pitch, yaw);
+            }
+        }
+    }
+
+    private Point2f[] CreateIdealChessboardPoints(Size patternSize, int squareSize)
+    {
+        var points = new Point2f[patternSize.Width * patternSize.Height];
+        for (int i = 0; i < patternSize.Height; i++)
+        {
+            for (int j = 0; j < patternSize.Width; j++)
+            {
+                points[i * patternSize.Width + j] = new Point2f(
+                    j * squareSize,
+                    i * squareSize
+                );
+            }
+        }
+        return points;
+    }
+
+    private (double roll, double pitch, double yaw) ExtractAnglesFromHomography(Mat H)
+    {
+        // 從透視變換矩陣中提取旋轉矩陣
+        // 注意：這是一個簡化的方法，實際應用中可能需要更複雜的計算
+        
+        // 正規化H矩陣
+        var norm = Math.Sqrt(H.At<double>(0,0) * H.At<double>(0,0) + 
+                           H.At<double>(1,0) * H.At<double>(1,0) + 
+                           H.At<double>(2,0) * H.At<double>(2,0));
+        
+        for(int i = 0; i < 3; i++)
+            for(int j = 0; j < 3; j++)
+                H.Set(i, j, H.At<double>(i,j) / norm);
+
+        // 提取角度
+        double roll = Math.Atan2(H.At<double>(1,0), H.At<double>(0,0));
+        double pitch = Math.Atan2(-H.At<double>(2,0), 
+            Math.Sqrt(H.At<double>(2,1) * H.At<double>(2,1) + H.At<double>(2,2) * H.At<double>(2,2)));
+        double yaw = Math.Atan2(H.At<double>(2,1), H.At<double>(2,2));
+
+        // 轉換為角度
+        return (
+            roll: roll * 180.0 / Math.PI,
+            pitch: pitch * 180.0 / Math.PI,
+            yaw: yaw * 180.0 / Math.PI
+        );
+    }
+}
+
+// 使用示例
+public class Program
+{
+    public static void Main()
+    {
+        var estimator = new ChessboardPoseEstimator(squareSize: 30); // 假設每個方格是30像素
+        var (roll, pitch, yaw) = estimator.EstimatePose("chessboard.jpg");
+        
+        Console.WriteLine($"估算姿態角度:");
+        Console.WriteLine($"Roll: {roll:F2}°");
+        Console.WriteLine($"Pitch: {pitch:F2}°");
+        Console.WriteLine($"Yaw: {yaw:F2}°");
+    }
+}
