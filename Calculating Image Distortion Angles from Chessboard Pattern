@@ -1,8 +1,11 @@
-using OpenCvSharp;
-
-public class ChessboardPerspectiveCorrection
+public static class ChessboardPoseEstimation
 {
-    public static Mat CorrectPerspective(Mat inputImage)
+    public static void EstimateChessboardPose(
+        ref Mat inputImage,
+        ref Mat correctedImage,
+        ref double roll,
+        ref double pitch,
+        ref double yaw)
     {
         // 轉換成灰階影像
         Mat gray = new Mat();
@@ -23,9 +26,9 @@ public class ChessboardPerspectiveCorrection
         Cv2.CornerSubPix(gray, corners, new Size(11, 11), new Size(-1, -1),
             new TermCriteria(CriteriaTypes.Eps | CriteriaTypes.MaxIter, 30, 0.1));
 
-        // 建立理想的棋盤格點位置（未變形時的位置）
+        // 建立理想的棋盤格點位置
         Point2f[] idealPoints = new Point2f[patternSize.Width * patternSize.Height];
-        float squareSize = 50.0f; // 每個方格的大小（像素）
+        float squareSize = 50.0f;
         for (int i = 0; i < patternSize.Height; i++)
         {
             for (int j = 0; j < patternSize.Width; j++)
@@ -41,22 +44,68 @@ public class ChessboardPerspectiveCorrection
         Mat perspectiveMatrix = Cv2.GetPerspectiveTransform(corners, idealPoints);
 
         // 進行透視校正
-        Mat correctedImage = new Mat();
+        correctedImage = new Mat();
         Cv2.WarpPerspective(inputImage, correctedImage, perspectiveMatrix,
             new Size(patternSize.Width * squareSize, patternSize.Height * squareSize));
 
-        return correctedImage;
+        // 提取旋轉角度
+        ExtractRotationAngles(perspectiveMatrix, ref roll, ref pitch, ref yaw);
+
+        // 釋放資源
+        gray.Dispose();
+        perspectiveMatrix.Dispose();
     }
 
-    public static void GetDeformationParameters(Mat perspectiveMatrix)
+    private static void ExtractRotationAngles(Mat perspectiveMatrix, ref double roll, ref double pitch, ref double yaw)
     {
-        // 從透視變換矩陣中提取變形參數
-        // 這裡可以根據需求分析旋轉角度、傾斜度等
-        
-        // 例如提取旋轉角度（這只是簡化的示例）
-        double angle = Math.Atan2(perspectiveMatrix.At<double>(1, 0), 
-                                perspectiveMatrix.At<double>(0, 0)) * 180 / Math.PI;
-        
-        Console.WriteLine($"Rotation angle: {angle} degrees");
+        // 正規化透視變換矩陣
+        double scale = Math.Sqrt(
+            perspectiveMatrix.At<double>(2, 0) * perspectiveMatrix.At<double>(2, 0) +
+            perspectiveMatrix.At<double>(2, 1) * perspectiveMatrix.At<double>(2, 1) +
+            perspectiveMatrix.At<double>(2, 2) * perspectiveMatrix.At<double>(2, 2)
+        );
+
+        Mat rotMat = new Mat(3, 3, MatType.CV_64F);
+        for (int i = 0; i < 3; i++)
+        {
+            for (int j = 0; j < 3; j++)
+            {
+                rotMat.Set<double>(i, j, perspectiveMatrix.At<double>(i, j) / scale);
+            }
+        }
+
+        // 計算歐拉角
+        roll = Math.Atan2(rotMat.At<double>(2, 1), rotMat.At<double>(2, 2));
+        pitch = Math.Atan2(-rotMat.At<double>(2, 0),
+            Math.Sqrt(rotMat.At<double>(2, 1) * rotMat.At<double>(2, 1) +
+                     rotMat.At<double>(2, 2) * rotMat.At<double>(2, 2)));
+        yaw = Math.Atan2(rotMat.At<double>(1, 0), rotMat.At<double>(0, 0));
+
+        // 轉換為角度
+        roll = roll * 180.0 / Math.PI;
+        pitch = pitch * 180.0 / Math.PI;
+        yaw = yaw * 180.0 / Math.PI;
+
+        // 釋放資源
+        rotMat.Dispose();
+    }
+
+    // 可選：添加額外的變形參數計算方法
+    public static void GetDeformationParameters(Mat perspectiveMatrix, 
+        ref double scaleX, ref double scaleY, 
+        ref double translateX, ref double translateY)
+    {
+        scaleX = Math.Sqrt(
+            perspectiveMatrix.At<double>(0, 0) * perspectiveMatrix.At<double>(0, 0) +
+            perspectiveMatrix.At<double>(1, 0) * perspectiveMatrix.At<double>(1, 0)
+        );
+
+        scaleY = Math.Sqrt(
+            perspectiveMatrix.At<double>(0, 1) * perspectiveMatrix.At<double>(0, 1) +
+            perspectiveMatrix.At<double>(1, 1) * perspectiveMatrix.At<double>(1, 1)
+        );
+
+        translateX = perspectiveMatrix.At<double>(0, 2);
+        translateY = perspectiveMatrix.At<double>(1, 2);
     }
 }
