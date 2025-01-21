@@ -42,29 +42,31 @@ public class HyperbolaFitting
             return new double[] { dx_a, dx_b, dx_h, dx_k };
         }
 
-        public double EvaluateObjectiveFunction(double[] parameters)
+        public double EvaluateObjectiveFunction(Vector<double> parameters)
         {
             double sum = 0;
+            double[] paramsArray = parameters.ToArray();
             foreach (var point in Points)
             {
-                double error = Calculate(parameters, point[0], point[1]);
+                double error = Calculate(paramsArray, point[0], point[1]);
                 sum += error * error;
             }
             return sum;
         }
 
-        public double[] EvaluateGradient(double[] parameters)
+        public Vector<double> EvaluateGradient(Vector<double> parameters)
         {
             var gradient = new double[4];
+            double[] paramsArray = parameters.ToArray();
             foreach (var point in Points)
             {
-                var pointGradient = Gradient(parameters, point[0], point[1]);
+                var pointGradient = Gradient(paramsArray, point[0], point[1]);
                 for (int i = 0; i < 4; i++)
                 {
-                    gradient[i] += 2 * Calculate(parameters, point[0], point[1]) * pointGradient[i];
+                    gradient[i] += 2 * Calculate(paramsArray, point[0], point[1]) * pointGradient[i];
                 }
             }
-            return gradient;
+            return Vector<double>.Build.DenseOfArray(gradient);
         }
     }
 
@@ -73,21 +75,20 @@ public class HyperbolaFitting
         var function = new HyperbolaFunction(points);
         
         // 創建 objective function
-        var objective = ObjectiveFunction.Gradient(
-            x => function.EvaluateObjectiveFunction(x),
-            x => function.EvaluateGradient(x));
+        var objective = ObjectiveFunction.GradientHessian(
+            function.EvaluateObjectiveFunction,
+            function.EvaluateGradient);
 
         // 配置最佳化器
-        var optimizer = new LevenbergMarquardtMinimizer(
-            maximumIterations: 1000,
-            gradientTolerance: 1e-8,
-            parameterTolerance: 1e-8,
-            functionTolerance: 1e-8);
+        var optimizer = new LevenbergMarquardtMinimizer();
+
+        // 設定初始參數向量
+        var initialGuess = Vector<double>.Build.DenseOfArray(function.Parameters);
 
         // 執行最佳化
-        var result = optimizer.FindMinimum(objective, function.Parameters);
+        var result = optimizer.Minimize(objective, initialGuess);
 
-        return result.MinimizingPoint;
+        return result.MinimizingPoint.ToArray();
     }
 
     public static (double, double) FindFocalPoint(double[] parameters)
