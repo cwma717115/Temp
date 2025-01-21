@@ -1,0 +1,127 @@
+using MathNet.Numerics.LinearAlgebra;
+using MathNet.Numerics.Optimization;
+
+public class HyperbolaFitting
+{
+    // 雙曲線方程式: (x-h)^2/a^2 - (y-k)^2/b^2 = 1
+    // 參數: [a, b, h, k]
+    private class HyperbolaFunction
+    {
+        public double[] Parameters { get; set; }
+        public double[][] Points { get; set; }
+
+        public HyperbolaFunction(double[][] points)
+        {
+            Points = points;
+            // 初始參數估計
+            Parameters = new double[] { 1.0, 1.0, 0.0, 0.0 };
+        }
+
+        public double Calculate(double[] parameters, double x, double y)
+        {
+            double a = parameters[0];
+            double b = parameters[1];
+            double h = parameters[2];
+            double k = parameters[3];
+
+            return Math.Pow((x - h) / a, 2) - Math.Pow((y - k) / b, 2) - 1;
+        }
+
+        public double[] Gradient(double[] parameters, double x, double y)
+        {
+            double a = parameters[0];
+            double b = parameters[1];
+            double h = parameters[2];
+            double k = parameters[3];
+
+            double dx_a = -2 * Math.Pow(x - h, 2) / Math.Pow(a, 3);
+            double dx_b = 2 * Math.Pow(y - k, 2) / Math.Pow(b, 3);
+            double dx_h = -2 * (x - h) / Math.Pow(a, 2);
+            double dx_k = 2 * (y - k) / Math.Pow(b, 2);
+
+            return new double[] { dx_a, dx_b, dx_h, dx_k };
+        }
+
+        public double EvaluateObjectiveFunction(double[] parameters)
+        {
+            double sum = 0;
+            foreach (var point in Points)
+            {
+                double error = Calculate(parameters, point[0], point[1]);
+                sum += error * error;
+            }
+            return sum;
+        }
+
+        public double[] EvaluateGradient(double[] parameters)
+        {
+            var gradient = new double[4];
+            foreach (var point in Points)
+            {
+                var pointGradient = Gradient(parameters, point[0], point[1]);
+                for (int i = 0; i < 4; i++)
+                {
+                    gradient[i] += 2 * Calculate(parameters, point[0], point[1]) * pointGradient[i];
+                }
+            }
+            return gradient;
+        }
+    }
+
+    public static double[] FitHyperbola(double[][] points)
+    {
+        var function = new HyperbolaFunction(points);
+        
+        // 創建 objective function
+        var objective = ObjectiveFunction.Gradient(
+            x => function.EvaluateObjectiveFunction(x),
+            x => function.EvaluateGradient(x));
+
+        // 配置最佳化器
+        var optimizer = new LevenbergMarquardtMinimizer(
+            maximumIterations: 1000,
+            gradientTolerance: 1e-8,
+            parameterTolerance: 1e-8,
+            functionTolerance: 1e-8);
+
+        // 執行最佳化
+        var result = optimizer.FindMinimum(objective, function.Parameters);
+
+        return result.MinimizingPoint;
+    }
+
+    public static (double, double) FindFocalPoint(double[] parameters)
+    {
+        double a = parameters[0];
+        double b = parameters[1];
+        double h = parameters[2];
+        double k = parameters[3];
+
+        double c = Math.Sqrt(a * a + b * b);
+        
+        // 返回右焦點座標 (左焦點用 h-c)
+        return (h + c, k);
+    }
+
+    // 使用範例
+    public static void Main()
+    {
+        // 範例數據點
+        var points = new double[][]
+        {
+            new double[] { 1.0, 2.0 },
+            new double[] { 2.0, 3.5 },
+            new double[] { 3.0, 4.8 },
+            // 加入更多數據點...
+        };
+
+        // 擬合雙曲線
+        var parameters = FitHyperbola(points);
+        
+        // 計算焦點
+        var focalPoint = FindFocalPoint(parameters);
+        
+        Console.WriteLine($"最佳雙曲線參數: a={parameters[0]}, b={parameters[1]}, h={parameters[2]}, k={parameters[3]}");
+        Console.WriteLine($"右焦點座標: ({focalPoint.Item1}, {focalPoint.Item2})");
+    }
+}
